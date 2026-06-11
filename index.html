@@ -478,13 +478,27 @@ Scoring: 5=excellent outcome-focused, 4=good minor gaps, 3=average vague, 2=weak
   try { data = JSON.parse(raw); }
   catch { throw new Error('Could not parse the scoring response: ' + raw.slice(0, 200)); }
 
+  // Some proxies forward an Anthropic error body with a 200 status, so it slips
+  // past the !res.ok check above. Surface the real error message.
+  if (data.type === 'error' || data.error) {
+    throw new Error('Scoring service error: ' + (data.error?.message || JSON.stringify(data).slice(0, 300)));
+  }
+
   // A truncated answer (hit the token limit) produces invalid JSON — surface that clearly.
   if (data.stop_reason === 'max_tokens') {
     throw new Error('The response was cut off before it finished (too many questions for one pass). Try debriefing a shorter transcript or fewer questions at a time.');
   }
 
+  // The model declined for safety reasons — content is empty.
+  if (data.stop_reason === 'refusal') {
+    throw new Error('The model declined to score this transcript (safety refusal). Try removing any sensitive content and resubmit.');
+  }
+
   const text = data.content?.find(b => b.type === 'text')?.text || '';
-  if (!text.trim()) throw new Error('The model returned no text to score. Please try again.');
+  if (!text.trim()) {
+    // Include the response shape so the real cause is visible instead of a generic message.
+    throw new Error('No text in scoring response. Response keys: [' + Object.keys(data).join(', ') + ']' + (data.stop_reason ? ', stop_reason: ' + data.stop_reason : ''));
+  }
 
   try {
     return JSON.parse(text.replace(/```json|```/g, '').trim());
