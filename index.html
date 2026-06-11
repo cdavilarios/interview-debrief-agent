@@ -538,7 +538,7 @@ Scoring: 5=excellent specific outcome-focused, 4=good minor gaps, 3=average but 
 
   const user = `Company: ${company}\nRole: ${role}\nRound: ${round}\n${jd ? 'Requirements:\n' + jd + '\n' : ''}\nTranscript:\n${transcript}`;
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await fetch('https://purple-field-cf7e.clau-davila3.workers.dev', {
     method: 'POST',
     headers: buildHeaders(),
     body: JSON.stringify({
