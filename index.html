@@ -421,6 +421,7 @@ async function runDebrief() {
     renderSidebar();
     renderResults(inserted);
   } catch(e) {
+    console.error('[debrief] runDebrief failed:', e);   // full error + stack in DevTools console
     btn.classList.remove('loading'); btn.disabled = false;
     const d = document.createElement('div');
     d.className = 'error-box';
@@ -459,13 +460,37 @@ Scoring: 5=excellent outcome-focused, 4=good minor gaps, 3=average vague, 2=weak
   const res = await fetch('https://purple-field-cf7e.clau-davila3.workers.dev', {
     method: 'POST',
     headers: buildH(),
-    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 4000, system: sys, messages: [{ role: 'user', content: user }] })
+    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8000, system: sys, messages: [{ role: 'user', content: user }] })
   });
 
-  if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error?.message || 'API error ' + res.status); }
-  const data = await res.json();
+  // Read the body as text first so empty/non-JSON responses give a clear message
+  // instead of a bare "Unexpected end of JSON input".
+  const raw = await res.text();
+  console.log('[debrief] worker status:', res.status, '| body length:', raw.length, '| first 300 chars:', raw.slice(0, 300));
+  if (!res.ok) {
+    let msg;
+    try { msg = JSON.parse(raw).error?.message; } catch {}
+    throw new Error(msg || `API error ${res.status}: ${raw.slice(0, 200) || 'empty response from proxy'}`);
+  }
+  if (!raw.trim()) throw new Error('The scoring service returned an empty response. This usually means the request timed out — try a shorter transcript.');
+
+  let data;
+  try { data = JSON.parse(raw); }
+  catch { throw new Error('Could not parse the scoring response: ' + raw.slice(0, 200)); }
+
+  // A truncated answer (hit the token limit) produces invalid JSON — surface that clearly.
+  if (data.stop_reason === 'max_tokens') {
+    throw new Error('The response was cut off before it finished (too many questions for one pass). Try debriefing a shorter transcript or fewer questions at a time.');
+  }
+
   const text = data.content?.find(b => b.type === 'text')?.text || '';
-  return JSON.parse(text.replace(/```json|```/g,'').trim());
+  if (!text.trim()) throw new Error('The model returned no text to score. Please try again.');
+
+  try {
+    return JSON.parse(text.replace(/```json|```/g, '').trim());
+  } catch {
+    throw new Error('The model did not return valid JSON. It may have been cut off — try a shorter transcript.');
+  }
 }
 
 function renderResults(s) {
