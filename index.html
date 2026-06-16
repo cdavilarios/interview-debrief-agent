@@ -63,7 +63,7 @@ body{font-family:var(--sans);background:var(--bg);color:var(--text);min-height:1
 .sess-sc{font-family:var(--mono);font-size:10px;color:var(--mid);margin-top:3px}
 .sb-empty{padding:8px 12px;font-size:12px;color:var(--dim)}
 .sb-footer{margin:auto 14px 0;display:flex;flex-direction:column;gap:6px}
-.sb-user{font-size:11px;color:var(--muted);padding:0 8px}
+.sb-user{font-size:11px;color:var(--muted);padding:0 8px;word-break:break-all}
 .signout-btn{padding:8px 12px;background:none;border:1px solid var(--border);border-radius:var(--rs);color:var(--muted);font-family:var(--sans);font-size:11px;cursor:pointer;transition:all .15s;text-align:left}
 .signout-btn:hover{border-color:var(--border-dark);color:var(--mid)}
 
@@ -119,18 +119,18 @@ select option{background:var(--surface)}
 <body>
 
 <!-- Step 1: Create account -->
-<div class="screen active" id="screen-signup">
+<div class="screen" id="screen-signup">
   <div class="card">
     <div class="card-mark">debrief</div>
     <div class="card-title">Create your account</div>
-    <div class="card-sub">Your data stays in your browser. Nothing is stored on a server.</div>
+    <div class="card-sub">Your interviews sync securely to the cloud and stay private to your account.</div>
     <div class="step-dots">
       <div class="dot active"></div>
       <div class="dot"></div>
     </div>
     <div class="field">
-      <label>Username</label>
-      <input type="text" id="su-user" placeholder="e.g. claudia" autocomplete="username" />
+      <label>Email</label>
+      <input type="email" id="su-email" placeholder="you@example.com" autocomplete="email" />
     </div>
     <div class="field">
       <label>Password</label>
@@ -151,7 +151,7 @@ select option{background:var(--surface)}
   <div class="card">
     <div class="card-mark">debrief</div>
     <div class="card-title">Connect your API key</div>
-    <div class="card-sub">Your Anthropic API key powers the scoring. It's saved in your browser only — never sent to any server other than Anthropic directly.</div>
+    <div class="card-sub">Your Anthropic API key powers the scoring. It's stored privately in your account and used only to call Anthropic for each debrief.</div>
     <div class="step-dots">
       <div class="dot done"></div>
       <div class="dot active"></div>
@@ -167,14 +167,14 @@ select option{background:var(--surface)}
 </div>
 
 <!-- Login screen -->
-<div class="screen" id="screen-login">
+<div class="screen active" id="screen-login">
   <div class="card">
     <div class="card-mark">debrief</div>
     <div class="card-title">Welcome back</div>
     <div class="card-sub" id="login-sub">Sign in to continue.</div>
     <div class="field">
-      <label>Username</label>
-      <input type="text" id="li-user" placeholder="your username" autocomplete="username" onkeydown="if(event.key==='Enter')doLogin()" />
+      <label>Email</label>
+      <input type="email" id="li-email" placeholder="you@example.com" autocomplete="email" onkeydown="if(event.key==='Enter')doLogin()" />
     </div>
     <div class="field">
       <label>Password</label>
@@ -206,119 +206,132 @@ select option{background:var(--surface)}
   <main class="main" id="main-panel"></main>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
-// ── Constants ────────────────────────────────────────────────
-const USERS_KEY   = 'dba_users';
-const SESSION_KEY = 'dba_session';
-const SESS_KEY    = 'dba_sessions_v1';
+// ── Supabase config ──────────────────────────────────────────
+// Replace these two values with your project's URL and anon (public) key.
+// Find them in Supabase → Project Settings → API.
+const SUPABASE_URL      = 'https://snyowpkzgxcmfvirktmh.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNueW93cGt6Z3hjbWZ2aXJrdG1oIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODExMjk0NTgsImV4cCI6MjA5NjcwNTQ1OH0.RnepKKHuylVgQ30gxrzdb2xWzEsEcnuZGFDCmKH_ElY';
 
-let sessions = [];
-let activeId  = null;
-let currentUser = null;
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ── Helpers ──────────────────────────────────────────────────
-function hash(str) {
-  let h = 5381;
-  for (let i = 0; i < str.length; i++) h = (h * 33) ^ str.charCodeAt(i);
-  return (h >>> 0).toString(36);
-}
+// ── State ────────────────────────────────────────────────────
+let sessions    = [];
+let activeId    = null;
+let currentUser = null;   // supabase auth user object
+let apiKey      = '';     // loaded from the user's profile row
 
-function getUsers() { return JSON.parse(localStorage.getItem(USERS_KEY) || '{}'); }
-function saveUsers(u) { localStorage.setItem(USERS_KEY, JSON.stringify(u)); }
-
+// ── Screen routing ───────────────────────────────────────────
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById('app').classList.remove('active');
-  const el = document.getElementById(id);
-  if (el.classList.contains('screen')) el.classList.add('active');
-  else el.classList.add('active');
+  document.getElementById(id).classList.add('active');
 }
 
-// ── Signup ───────────────────────────────────────────────────
 function goSignup() { showScreen('screen-signup'); }
 function goLogin()  { showScreen('screen-login'); }
 
-function doSignup() {
-  const user = document.getElementById('su-user').value.trim().toLowerCase();
-  const pw   = document.getElementById('su-pw').value;
-  const pw2  = document.getElementById('su-pw2').value;
-  const err  = document.getElementById('su-err');
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-  if (user.length < 2)  { err.textContent = 'Username must be at least 2 characters.'; return; }
-  if (pw.length < 6)    { err.textContent = 'Password must be at least 6 characters.'; return; }
-  if (pw !== pw2)        { err.textContent = 'Passwords do not match.'; return; }
+// ── Signup ───────────────────────────────────────────────────
+async function doSignup() {
+  const email = document.getElementById('su-email').value.trim().toLowerCase();
+  const pw    = document.getElementById('su-pw').value;
+  const pw2   = document.getElementById('su-pw2').value;
+  const err   = document.getElementById('su-err');
 
-  const users = getUsers();
-  if (users[user])       { err.textContent = 'Username already taken.'; return; }
+  if (!EMAIL_RE.test(email)) { err.textContent = 'Please enter a valid email address.'; return; }
+  if (pw.length < 6)         { err.textContent = 'Password must be at least 6 characters.'; return; }
+  if (pw !== pw2)            { err.textContent = 'Passwords do not match.'; return; }
 
-  users[user] = { pwHash: hash(pw), apiKey: '' };
-  saveUsers(users);
-  currentUser = user;
+  err.textContent = 'Creating account…';
+  const { data, error } = await db.auth.signUp({ email, password: pw });
+  if (error) { err.textContent = error.message; return; }
+
+  // If email confirmation is enabled, there's no session yet — the user
+  // must confirm via email before signing in.
+  if (!data.session) {
+    err.textContent = 'Check your email to confirm your account, then sign in.';
+    return;
+  }
+
+  currentUser = data.user;
   err.textContent = '';
   showScreen('screen-apikey');
 }
 
 // ── API key setup ────────────────────────────────────────────
-function doApiKey() {
+async function doApiKey() {
   const key = document.getElementById('ak-input').value.trim();
   const err = document.getElementById('ak-err');
   if (key.length < 10) { err.textContent = 'Please enter a valid API key.'; return; }
 
-  const users = getUsers();
-  users[currentUser].apiKey = key;
-  saveUsers(users);
-  sessionStorage.setItem(SESSION_KEY, currentUser);
+  const { data: { user } } = await db.auth.getUser();
+  if (!user) { err.textContent = 'Session expired. Please sign in again.'; goLogin(); return; }
+
+  err.textContent = 'Saving…';
+  const { error } = await db.from('profiles').update({ api_key: key }).eq('id', user.id);
+  if (error) { err.textContent = error.message; return; }
+
+  apiKey = key;
   err.textContent = '';
   launchApp();
 }
 
 // ── Login ────────────────────────────────────────────────────
-function doLogin() {
-  const user = document.getElementById('li-user').value.trim().toLowerCase();
-  const pw   = document.getElementById('li-pw').value;
-  const err  = document.getElementById('li-err');
+async function doLogin() {
+  const email = document.getElementById('li-email').value.trim().toLowerCase();
+  const pw    = document.getElementById('li-pw').value;
+  const err   = document.getElementById('li-err');
 
-  const users = getUsers();
-  if (!users[user] || users[user].pwHash !== hash(pw)) {
-    err.textContent = 'Incorrect username or password.';
+  err.textContent = 'Signing in…';
+  const { error } = await db.auth.signInWithPassword({ email, password: pw });
+  if (error) {
+    err.textContent = 'Incorrect email or password.';
     document.getElementById('li-pw').value = '';
     return;
   }
-
-  currentUser = user;
-  sessionStorage.setItem(SESSION_KEY, user);
   err.textContent = '';
   launchApp();
 }
 
-function signOut() {
-  sessionStorage.removeItem(SESSION_KEY);
+async function signOut() {
+  await db.auth.signOut();
   currentUser = null;
   sessions = [];
   activeId = null;
+  apiKey = '';
   showScreen('screen-login');
 }
 
-// ── App ──────────────────────────────────────────────────────
-function launchApp() {
-  const users = getUsers();
-  const u = users[currentUser];
-  sessions = JSON.parse(localStorage.getItem(SESS_KEY + '_' + currentUser) || '[]');
-  document.getElementById('sb-username').textContent = currentUser;
+// ── App bootstrap ────────────────────────────────────────────
+async function launchApp() {
+  const { data: { user } } = await db.auth.getUser();
+  if (!user) { showScreen('screen-login'); return; }
+  currentUser = user;
+
+  // Load the profile (api key). The row is created by a DB trigger at signup.
+  const { data: prof } = await db.from('profiles').select('api_key').eq('id', user.id).single();
+  apiKey = prof?.api_key || '';
+  if (!apiKey) { showScreen('screen-apikey'); return; }   // prompt for key if not set yet
+
+  // Load this user's sessions (RLS limits the result to their own rows).
+  const { data: rows, error } = await db.from('sessions')
+    .select('*').eq('user_id', user.id).order('created_at', { ascending: true });
+  if (error) { alert('Could not load sessions: ' + error.message); }
+  sessions = rows || [];
+
+  document.getElementById('sb-username').textContent = user.email;
   showScreen('app');
   renderSidebar();
   if (sessions.length) loadSession(sessions[sessions.length - 1].id);
   else showNew();
 }
 
-function saveSessions() {
-  localStorage.setItem(SESS_KEY + '_' + currentUser, JSON.stringify(sessions));
-}
+function getApiKey() { return apiKey; }
 
-function getApiKey() {
-  return getUsers()[currentUser]?.apiKey || '';
-}
-
+// ── Sidebar ──────────────────────────────────────────────────
 function renderSidebar() {
   const list = document.getElementById('session-list');
   if (!sessions.length) { list.innerHTML = '<div class="sb-empty">No sessions yet</div>'; return; }
@@ -396,16 +409,19 @@ async function runDebrief() {
   const btn = document.getElementById('run-btn');
   btn.classList.add('loading'); btn.disabled = true;
 
-  const id = Date.now().toString();
   try {
     const results = await callClaude(co, role, rnd, jd, tx);
-    const s = { id, company: co, role, round: rnd, date, jd, transcript: tx, results };
-    sessions.push(s);
-    activeId = id;
-    saveSessions();
+    const { data: inserted, error } = await db.from('sessions').insert({
+      user_id: currentUser.id, company: co, role, round: rnd, date, jd, transcript: tx, results
+    }).select().single();
+    if (error) throw new Error(error.message);
+
+    sessions.push(inserted);
+    activeId = inserted.id;
     renderSidebar();
-    renderResults(s);
+    renderResults(inserted);
   } catch(e) {
+    console.error('[debrief] runDebrief failed:', e);   // full error + stack in DevTools console
     btn.classList.remove('loading'); btn.disabled = false;
     const d = document.createElement('div');
     d.className = 'error-box';
@@ -444,13 +460,51 @@ Scoring: 5=excellent outcome-focused, 4=good minor gaps, 3=average vague, 2=weak
   const res = await fetch('https://purple-field-cf7e.clau-davila3.workers.dev', {
     method: 'POST',
     headers: buildH(),
-    body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 4000, system: sys, messages: [{ role: 'user', content: user }] })
+    body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: 8000, system: sys, messages: [{ role: 'user', content: user }] })
   });
 
-  if (!res.ok) { const e = await res.json().catch(()=>({})); throw new Error(e.error?.message || 'API error ' + res.status); }
-  const data = await res.json();
+  // Read the body as text first so empty/non-JSON responses give a clear message
+  // instead of a bare "Unexpected end of JSON input".
+  const raw = await res.text();
+  console.log('[debrief] worker status:', res.status, '| body length:', raw.length, '| first 300 chars:', raw.slice(0, 300));
+  if (!res.ok) {
+    let msg;
+    try { msg = JSON.parse(raw).error?.message; } catch {}
+    throw new Error(msg || `API error ${res.status}: ${raw.slice(0, 200) || 'empty response from proxy'}`);
+  }
+  if (!raw.trim()) throw new Error('The scoring service returned an empty response. This usually means the request timed out — try a shorter transcript.');
+
+  let data;
+  try { data = JSON.parse(raw); }
+  catch { throw new Error('Could not parse the scoring response: ' + raw.slice(0, 200)); }
+
+  // Some proxies forward an Anthropic error body with a 200 status, so it slips
+  // past the !res.ok check above. Surface the real error message.
+  if (data.type === 'error' || data.error) {
+    throw new Error('Scoring service error: ' + (data.error?.message || JSON.stringify(data).slice(0, 300)));
+  }
+
+  // A truncated answer (hit the token limit) produces invalid JSON — surface that clearly.
+  if (data.stop_reason === 'max_tokens') {
+    throw new Error('The response was cut off before it finished (too many questions for one pass). Try debriefing a shorter transcript or fewer questions at a time.');
+  }
+
+  // The model declined for safety reasons — content is empty.
+  if (data.stop_reason === 'refusal') {
+    throw new Error('The model declined to score this transcript (safety refusal). Try removing any sensitive content and resubmit.');
+  }
+
   const text = data.content?.find(b => b.type === 'text')?.text || '';
-  return JSON.parse(text.replace(/```json|```/g,'').trim());
+  if (!text.trim()) {
+    // Include the response shape so the real cause is visible instead of a generic message.
+    throw new Error('No text in scoring response. Response keys: [' + Object.keys(data).join(', ') + ']' + (data.stop_reason ? ', stop_reason: ' + data.stop_reason : ''));
+  }
+
+  try {
+    return JSON.parse(text.replace(/```json|```/g, '').trim());
+  } catch {
+    throw new Error('The model did not return valid JSON. It may have been cut off — try a shorter transcript.');
+  }
 }
 
 function renderResults(s) {
@@ -505,16 +559,11 @@ function esc(s) {
 }
 
 // ── Init ─────────────────────────────────────────────────────
-const savedUser = sessionStorage.getItem(SESSION_KEY);
-const users = getUsers();
-if (savedUser && users[savedUser]) {
-  currentUser = savedUser;
-  launchApp();
-} else if (Object.keys(users).length > 0) {
-  showScreen('screen-login');
-} else {
-  showScreen('screen-signup');
-}
+(async () => {
+  const { data: { session } } = await db.auth.getSession();
+  if (session) await launchApp();
+  else showScreen('screen-login');
+})();
 </script>
 </body>
 </html>
